@@ -1,0 +1,9 @@
+:root {
+  --el-color-primary: rgb(0 0 0 / 12%);
+  --el-timepicker-active-color: #f56c6c;
+}
+:root.dark {
+  --color-background: var(---dmd-dark);
+  --color-text: var(--dmd-text-dark);
+  color-scheme: dark;
+}

@@ -1,0 +1,6 @@
+html.dark {
+  /* 自定义深色背景颜色 部分组件无效*/
+  /* --el-bg-color: red; */
+  /* 自定义组件主题色 */
+  --el-color-primary: #f56c6c;
+}

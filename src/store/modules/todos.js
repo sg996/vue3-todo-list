@@ -1,14 +1,12 @@
-const TODOS = [
-  { id: "1638256190206", name: "敲代码", done: true },
-  { id: "1638256191770", name: "整理笔记", done: false },
-  { id: "1638256193996", name: "吃饭", done: false },
-];
-const DONETODOS = ["1638256190206"];
+import network from '../../api/network';
+import utilData from '../../api/utils';
 
-const state = {
-  todos: JSON.parse(JSON.stringify(TODOS)),
-  doneTodos: JSON.parse(JSON.stringify(DONETODOS)),
-};
+// 异步加载
+const state = () => ({
+  todos: [],
+  doneTodos: [],
+});
+
 // getters
 const getters = {
   todosLen: (state) => {
@@ -17,15 +15,28 @@ const getters = {
   doneTodosLen: (state) => {
     return state.doneTodos.length;
   },
+  completePercent: (state) => {
+    if (state.todos.length === 0) {
+      return 0;
+    } else {
+      return (state.doneTodos.length / state.todos.length) * 100;
+    }
+  },
   // 选中 todo 按钮删除状态
-  isDone: (state) => state.todos.some((todo) => todo.done),
+  isDone: (state) =>
+    state.todos.some((todo) => todo.status === utilData.TASKSTATUS.DONE),
+  // 全选状态
+  isCheckedAll: (state) => {
+    return state.todos.length === state.doneTodos.length;
+  },
 };
-// mutations
+
+// mutations: 同步更改状态
 const mutations = {
   // 更新 doneTodos
   updateDoneTodos(state) {
     state.doneTodos = state.todos.reduce((result, todo) => {
-      todo.done && result.push(todo.id);
+      todo.status === utilData.TASKSTATUS.DONE && result.push(todo.id);
       return result;
     }, []);
   },
@@ -38,38 +49,41 @@ const mutations = {
     state.doneTodos = doneTodos;
     state.todos = Array.from(state.todos, (todo) => ({
       ...todo,
-      done: doneTodos.includes(todo.id),
+      status: doneTodos.includes(todo.id)
+        ? utilData.TASKSTATUS.DONE
+        : todo.status,
     }));
   },
   // 删除 todo
   deleteTodo(state, { id }) {
     state.todos = state.todos.filter((todo) => todo.id !== id);
-    state.doneTodos.splice(state.doneTodos.indexOf(id), 1);
   },
   // 全选
-  checkAllTodo(state, checked) {
+  checkAllTodo(state) {
     state.todos = Array.from(state.todos, (todo) => ({
       ...todo,
-      done: checked,
+      status: utilData.TASKSTATUS.DONE,
     }));
-  },
-  // 反选
-  reverseTodoDone(state) {
-    state.todos = state.todos.map((todo) => {
-      todo.done = !todo.done;
-      return todo;
-    });
-  },
-  // 重置
-  resetTodos(state) {
-    state.todos = JSON.parse(JSON.stringify(TODOS));
-    state.doneTodos = JSON.parse(JSON.stringify(DONETODOS));
   },
   // 清除已完成
   clearAllDoneTodo(state) {
-    state.todos = state.todos.filter((todo) => !todo.done);
+    state.todos = state.todos.filter(
+      (todo) => todo.status === utilData.TASKSTATUS.CREATED
+    );
+    // TODO: 2022-07-15 数据同步
+  },
+  // 初始化任务
+  setTodo(state, task) {
+    state.todos = task.todos;
+    state.doneTodos = task.doneTodos;
+  },
+  // 保存至本地缓存中
+  saveLocal(state) {
+    localStorage.setItem('todos', JSON.stringify(state.todos));
+    localStorage.setItem('doneTodos', JSON.stringify(state.doneTodos));
   },
 };
+
 // actions
 const actions = {
   // 名称重复校验
@@ -78,29 +92,93 @@ const actions = {
       reslove(state.todos.some((todo) => todo.name === name));
     });
   },
-  // 全选
-  checkAll({ commit }, checked) {
-    commit("checkAllTodo", checked);
-    commit("updateDoneTodos");
+  // 新任务有效性检测
+  checkNewTaskTime({ state }, startTime) {
+    return new Promise((reslove) => {
+      let tmpList = state.todos.filter(
+        (item) => item.status === utilData.TASKSTATUS.CREATED
+      );
+      // 新任务开始时间必须大于最后一个任务的开始时间5分钟，新任务持续时间必须大于5分钟
+      let res = tmpList.some((it) => {
+        return startTime - it.startTime < 300000;
+      });
+      reslove(res);
+    });
   },
-  // 反选
-  reverseCheck({ commit }) {
-    commit("reverseTodoDone");
-    commit("updateDoneTodos");
-  },
-  // 异步重置数据
-  resetTodos({ commit }) {
+  // 数据同步
+  syncData() {
     return new Promise((reslove) => {
       setTimeout(() => {
-        commit("resetTodos");
-        reslove(false);
-      }, 1500);
+        reslove(true);
+        // reject('Failed to sync data!');
+      }, 1000);
     });
   },
   // 清除已完成
-  clearAllDone({ commit }) {
-    commit("clearAllDoneTodo");
-    commit("updateDoneTodos");
+  async clearAllDone({ commit }) {
+    commit('clearAllDoneTodo');
+    commit('updateDoneTodos');
+    commit('saveLocal');
+  },
+
+  // 异步访问数据库
+  async getAllTodo({ commit }) {
+    const todos = await network.getTodos();
+    commit('setTodo', todos);
+    commit('saveLocal');
+  },
+
+  // 异步创建定时器
+  createTimer({ state }, obj) {
+    return new Promise((reslove) => {
+      let num = utilData.NOTIFYFREQ;
+      let timer = null;
+      // 重复提醒
+      function repeatNotice() {
+        // 设定时间前检查当前任务状态是否为已完成
+        if (state.doneTodos.indexOf(obj.todoObj.id) >= 0) {
+          clearTimeout(timer); // 清除定时器
+          timer = null;
+          return;
+        } else if (
+          state.todos.filter((item) => item.id === obj.todoObj.id).length <= 0
+        ) {
+          clearTimeout(timer); // 清除定时器
+          timer = null;
+          return;
+        }
+        if (num == 0) {
+          clearTimeout(timer); // 清除定时器
+          timer = null;
+          // 如果该任务状态为 创建，则重置为 未完成
+          for (let i = 0; i < state.todos.length; i++) {
+            if (
+              state.todos[i].id === obj.todoObj.id &&
+              state.todos[i].status === utilData.TASKSTATUS.CREATED
+            ) {
+              state.todos[i].status = utilData.TASKSTATUS.UNDONE;
+              return;
+            }
+          }
+          return;
+        } else {
+          // 播放音效
+          obj.noticeTag.play();
+          // 震动
+          if (window.navigator.vibrate) {
+            window.navigator.vibrate([200, 100, 200]);
+          }
+          timer = setTimeout(repeatNotice, 120000); // 每隔两分钟，递归调用一次
+        }
+        num--;
+      }
+      // 创建延迟定时器，默认提前5分钟
+      timer = setTimeout(
+        repeatNotice,
+        obj.todoObj.startTime - obj.todoObj.id - 300000
+      );
+      reslove(true);
+    });
   },
 };
 
